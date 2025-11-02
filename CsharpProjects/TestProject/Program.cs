@@ -61,12 +61,215 @@ namespace ExercisesApp
         }
     }
 
+    // ========= Models =========
+    public sealed class Product   // sealed to prevent inheritance here (demo choice)
+    {
+        // Public get; private set; => encapsulation (external code can read, only this class can set)
+        public int Id { get; private set; }
+        public string Name { get; private set; } = "";
+        public decimal Price { get; private set; }
+
+        // Private constructor forces use of factory for validation
+        private Product(int id, string name, decimal price)
+        {
+            Id = id;
+            Name = name;
+            Price = price;
+        }
+
+        // Static factory with validation
+        public static Product Create(int id, string name, decimal price)
+        {
+            if (id <= 0) throw new ArgumentOutOfRangeException(nameof(id), "Id must be positive.");
+            if (string.IsNullOrWhiteSpace(name)) throw new ArgumentException("Name required.", nameof(name));
+            if (price < 0) throw new ArgumentOutOfRangeException(nameof(price), "Price cannot be negative.");
+            return new Product(id, name.Trim(), price);
+        }
+
+        public override string ToString() => $"#{Id} {Name} (${Price:0.00})";
+    }
+
+    // Simple order line model
+    public class OrderLine
+    {
+        public int ProductId { get; }
+        public int Quantity { get; }
+
+        public OrderLine(int productId, int quantity)
+        {
+            if (quantity <= 0) throw new ArgumentOutOfRangeException(nameof(quantity));
+            ProductId = productId;
+            Quantity = quantity;
+        }
+    }
+
+    // Simple order "receipt"
+    public class OrderReceipt
+    {
+        public IReadOnlyList<(Product product, int qty, decimal lineTotal)> Lines { get; }
+        public decimal Total { get; }
+
+        public OrderReceipt(IReadOnlyList<(Product product, int qty, decimal lineTotal)> lines)
+        {
+            Lines = lines;
+            Total = lines.Sum(l => l.lineTotal);
+        }
+
+        public override string ToString()
+        {
+            var parts = Lines.Select(l => $"{l.product.Name} x{l.qty} = ${l.lineTotal:0.00}");
+            return string.Join("\n", parts) + $"\nTOTAL: ${Total:0.00}";
+        }
+    }
+
+    // ========= Services =========
+    public interface IInventoryService
+    {
+        void Add(Product product);
+        Product? FindById(int id);
+        IReadOnlyList<Product> GetAll();
+    }
+
+    public class InventoryService : IInventoryService
+    {
+        // private field, only this class can mutate the list
+        private readonly List<Product> _products = new List<Product>();
+
+        public void Add(Product product)
+        {
+            if (_products.Any(p => p.Id == product.Id))
+                throw new InvalidOperationException($"Product with Id {product.Id} already exists.");
+            _products.Add(product);
+        }
+
+        public Product? FindById(int id) => _products.FirstOrDefault(p => p.Id == id);
+
+        public IReadOnlyList<Product> GetAll() => _products.AsReadOnly();
+    }
+
+    public interface IOrderService
+    {
+        OrderReceipt PlaceOrder(IEnumerable<OrderLine> lines);
+    }
+
+    public class OrderService : IOrderService
+    {
+        private readonly IInventoryService _inventory;
+        private readonly ILogger _logger;
+
+        public OrderService(IInventoryService inventory, ILogger logger)
+        {
+            _inventory = inventory;
+            _logger = logger;
+        }
+
+        // public API; uses private method for calculation => encapsulation
+        public OrderReceipt PlaceOrder(IEnumerable<OrderLine> lines)
+        {
+            var resolved = new List<(Product product, int qty, decimal lineTotal)>();
+
+            foreach (var line in lines)
+            {
+                var product = _inventory.FindById(line.ProductId)
+                              ?? throw new KeyNotFoundException($"Product {line.ProductId} not found.");
+                var lineTotal = CalculateLineTotal(product.Price, line.Quantity);
+                resolved.Add((product, line.Quantity, lineTotal));
+            }
+
+            var receipt = new OrderReceipt(resolved);
+            _logger.Info($"Order placed. Items: {resolved.Count}, Total: ${receipt.Total:0.00}");
+            return receipt;
+        }
+
+        // private helper method hidden from consumers of OrderService
+        private static decimal CalculateLineTotal(decimal price, int qty) => price * qty;
+    }
+
+    // ========= Infrastructure =========
+    public interface ILogger
+    {
+        void Info(string message);
+        void Warn(string message);
+        void Error(string message);
+    }
+
+    // Simple console logger
+    public class ConsoleLogger : ILogger
+    {
+        // public methods on a public class; can be swapped for a file/structured logger
+        public void Info(string message) => Write("INFO", message);
+        public void Warn(string message) => Write("WARN", message);
+        public void Error(string message) => Write("ERROR", message);
+
+        private static void Write(string level, string message)
+            => Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] {level}: {message}");
+    }
+
+    // ========= Component (pretend "UI layer") =========
+    // This class coordinates services like a UI component would.
+    public class CartComponent
+    {
+        private readonly IInventoryService _inventory;
+        private readonly IOrderService _orders;
+
+        public CartComponent(IInventoryService inventory, IOrderService orders)
+        {
+            _inventory = inventory;
+            _orders = orders;
+        }
+
+        public void ShowCatalog()
+        {
+            Console.WriteLine("== Catalog ==");
+            foreach (var p in _inventory.GetAll())
+                Console.WriteLine(p);
+        }
+
+        public void Checkout(IEnumerable<OrderLine> cartLines)
+        {
+            var receipt = _orders.PlaceOrder(cartLines);
+            Console.WriteLine("\n== Receipt ==\n" + receipt);
+        }
+    }
+
+    // ========= Time-based service demonstrating interfaces & testability =========
+    public interface IClock
+    {
+        DateTime UtcNow { get; }
+    }
+
+    public class SystemClock : IClock
+    {
+        public DateTime UtcNow => DateTime.UtcNow;
+    }
+
+    public class FakeClock : IClock
+    {
+        public DateTime UtcNow { get; private set; }
+        public FakeClock(DateTime fixedUtcNow) => UtcNow = fixedUtcNow;
+    }
+
+    public class ExpiringOfferService
+    {
+        private readonly IClock _clock;
+        private readonly DateTime _expiryUtc;
+
+        public ExpiringOfferService(IClock clock, DateTime expiryUtc)
+        {
+            _clock = clock;
+            _expiryUtc = expiryUtc;
+        }
+
+        public bool IsOfferActive() => _clock.UtcNow < _expiryUtc;
+    }
+
+
     // ==============================================================================
     class Program
     {
         static async Task Main(string[] args)
         {
-            Console.Write("Choose exercise (1-30): ");
+            Console.Write("Choose exercise (1-36): ");
             var choice = Console.ReadLine();
 
             switch (choice)
@@ -101,8 +304,12 @@ namespace ExercisesApp
                 case "28": Exercise28(); break;
                 case "29": Exercise29(); break;
                 case "30": Exercise30(); break;
-
-
+                case "31": Exercise31(); break;
+                case "32": Exercise32(); break;
+                case "33": Exercise33(); break;
+                case "34": Exercise34(); break;
+                case "35": Exercise35(); break;
+                case "36": Exercise36(); break;
                 default: Console.WriteLine("Invalid choice."); break;
             }
 
@@ -115,9 +322,13 @@ namespace ExercisesApp
         {
             int[,] matrix = { { 1, 2, 3, 4 }, { 5, 6, 7, 8 }, { 9, 10, 11, 12 } };
             int sum = 0;
-            for (int i = 0; i < matrix.GetLength(0); i++)
-                for (int j = 0; j < matrix.GetLength(1); j++)
+            for (var i = 0; i < matrix.GetLength(0); i++)
+            {
+                for (var j = 0; j < matrix.GetLength(1); j++)
+                {
                     sum += matrix[i, j];
+                }
+            }
 
             Console.WriteLine($"[1] Sum of matrix elements: {sum}");
         }
@@ -512,6 +723,121 @@ namespace ExercisesApp
         {
             return string.Join(" ", Enumerable.Repeat($"Hi {name}!", times));
         }
+
+        // Exercise 31: Build inventory and list it (classes + service + encapsulation)
+        static void Exercise31()
+        {
+            var logger = new ConsoleLogger();
+            IInventoryService inv = new InventoryService();
+
+            inv.Add(Product.Create(1, "Notebook", 4.99m));
+            inv.Add(Product.Create(2, "Gel Pen", 1.49m));
+            inv.Add(Product.Create(3, "Backpack", 29.99m));
+
+            Console.WriteLine("[31] Inventory created. Listing all products:");
+            foreach (var p in inv.GetAll())
+                Console.WriteLine(" - " + p);
+
+            // (Integration) Reuse a previous exercise concept: average price (Exercise 27 style)
+            var avg = CalculateAverage(inv.GetAll().Select(p => (int)(p.Price * 100)).ToArray()) / 100.0;
+            Console.WriteLine($"[31] Average price: ${avg:0.00}");
+        }
+
+        // Exercise 32: Place an order (service calls, private helpers, logger)
+        static void Exercise32()
+        {
+            var logger = new ConsoleLogger();
+            IInventoryService inv = new InventoryService();
+            inv.Add(Product.Create(10, "USB-C Cable", 9.99m));
+            inv.Add(Product.Create(11, "Wireless Mouse", 24.50m));
+
+            IOrderService orders = new OrderService(inv, logger);
+
+            var lines = new[]
+            {
+        new OrderLine(10, 2),
+        new OrderLine(11, 1)
+    };
+
+            var receipt = orders.PlaceOrder(lines);
+            Console.WriteLine("[32] Placed order. Receipt:\n" + receipt);
+        }
+
+        // Exercise 33: Simulated "component" coordinating services
+        static void Exercise33()
+        {
+            var logger = new ConsoleLogger();
+            IInventoryService inv = new InventoryService();
+            inv.Add(Product.Create(101, "Mechanical Keyboard", 79.00m));
+            inv.Add(Product.Create(102, "Monitor 27\"", 229.99m));
+            inv.Add(Product.Create(103, "Desk Lamp", 19.49m));
+
+            IOrderService orders = new OrderService(inv, logger);
+            var cart = new CartComponent(inv, orders);
+
+            Console.WriteLine("[33] Showing catalog via component:");
+            cart.ShowCatalog();
+
+            Console.WriteLine("\n[33] Checking out via component...");
+            cart.Checkout(new[]
+            {
+        new OrderLine(101, 1),
+        new OrderLine(103, 2)
+    });
+        }
+
+        // Exercise 34: Interface-driven design (IClock) + testability with FakeClock
+        static void Exercise34()
+        {
+            var offerEnds = DateTime.UtcNow.AddMinutes(10);
+            var sysService = new ExpiringOfferService(new SystemClock(), offerEnds);
+            Console.WriteLine($"[34] Offer active (system clock)? {sysService.IsOfferActive()}");
+
+            // Fake time 1 hour in the future to simulate an expired offer
+            var fakeFuture = new FakeClock(DateTime.UtcNow.AddHours(1));
+            var testService = new ExpiringOfferService(fakeFuture, offerEnds);
+            Console.WriteLine($"[34] Offer active (fake future)? {testService.IsOfferActive()}");
+        }
+
+        // Exercise 35: Static factory + private ctor + validation (Product.Create)
+        static void Exercise35()
+        {
+            try
+            {
+                var p = Product.Create(500, "Gaming Chair", 149.99m);
+                Console.WriteLine("[35] Created product via factory: " + p);
+
+                // This will throw (negative price)
+                _ = Product.Create(501, "Broken Item", -1m);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("[35] Validation triggered: " + ex.Message);
+            }
+        }
+
+        // Exercise 36: “Repository-like” usage with access modifiers
+        static void Exercise36()
+        {
+            // Here InventoryService acts like a simple repository with controlled access
+            IInventoryService repo = new InventoryService();
+
+            // Add a few items
+            repo.Add(Product.Create(900, "SSD 1TB", 89.00m));
+            repo.Add(Product.Create(901, "RAM 32GB", 79.50m));
+
+            // Try get and print
+            var ssd = repo.FindById(900);
+            Console.WriteLine("[36] FindById(900): " + (ssd?.ToString() ?? "not found"));
+
+            // (Integration) Use earlier methods inside Program for additional processing
+            // Double every "rounded price" and sum (from your earlier DoubleEach + Sum style)
+            int[] priceCents = repo.GetAll().Select(p => (int)(p.Price * 100)).ToArray();
+            int[] doubled = DoubleEach(priceCents);   // from Exercise 28 in your Program
+            int total = Sum(doubled);                 // from Exercise 28 in your Program
+            Console.WriteLine($"[36] Sum of doubled prices (cents): {total}");
+        }
+
 
 
     }
