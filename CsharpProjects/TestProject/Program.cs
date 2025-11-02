@@ -1,4 +1,8 @@
-﻿using System;
+﻿/* **************************************************************************
+   Use in Conjunction with DotNetFiddle to Avoid Autocompletion Disturbances
+************************************************************************** */
+
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net.Http;
@@ -341,7 +345,12 @@ namespace ExercisesApp
             Array.Sort(items);
             Console.WriteLine("[2] Sorted items (flagging errors):");
             foreach (var item in items)
+            {
                 Console.WriteLine(item.Length == 4 ? item : $"{item}\t- Error");
+            }
+
+
+
         }
 
         // Exercise 3: Sort, find index of 8, reverse, print
